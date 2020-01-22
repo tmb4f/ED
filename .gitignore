@@ -1,0 +1,12 @@
+# ignore Excel file
+*.xlsx
+*.csv
+# ignore Word documents
+*.docx
+# ignore Text documents
+*.rpt
+*.txt
+# archive files
+*.zip
+# ignore PDF documents
+*.pdf
