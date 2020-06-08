@@ -7,7 +7,6 @@ GO
 SET QUOTED_IDENTIFIER OFF
 GO
 
-
 --ALTER PROCEDURE [Rptg].[usp_Src_Dash_PatExp_ED]
 --AS
 /**********************************************************************************************************************
@@ -51,6 +50,8 @@ DECLARE @currdate AS DATE;
 DECLARE @startdate AS DATE;
 DECLARE @enddate AS DATE;
 
+SET @startdate = '7/1/2019'
+SET @enddate = '6/30/2020'
 
     SET @currdate=CAST(GETDATE() AS DATE);
 
@@ -60,7 +61,6 @@ DECLARE @enddate AS DATE;
             SET @startdate = CAST(DATEADD(MONTH,DATEDIFF(MONTH,0,DATEADD(MONTH,-24,GETDATE())),0) AS DATE); 
             SET @enddate= CAST(EOMONTH(GETDATE()) AS DATE); 
         END; 
-
 
 SELECT DISTINCT
 	 Resp.SURVEY_ID
@@ -72,6 +72,7 @@ SELECT DISTINCT
 	,phys.DEPT AS Phys_Dept
 	,phys.Division AS Phys_Div
 	,'Emergency Department' AS UNIT
+	,10243026 AS EPIC_DEPARTMENT_ID
 	,CAST(Resp.VALUE AS NVARCHAR(500)) AS VALUE -- prevents Tableau from erroring out on import data source
 	,CASE WHEN Resp.VALUE IS NOT NULL THEN 1 ELSE 0 END AS VAL_COUNT
 	,extd.DOMAIN
@@ -153,19 +154,18 @@ SELECT DISTINCT
 	,TOP_BOX
 	,VAL_COUNT
 	,#surveys_er.AGE_STATUS
-	,goals.EPIC_DEPARTMENT_ID
-	,goals_overall.EPIC_DEPARTMENT_ID AS EPIC_DEPARTMENT_ID_OVERALL
+	,#surveys_er.EPIC_DEPARTMENT_ID
 INTO #surveys_er2
 FROM (SELECT * FROM DS_HSDW_Prod.dbo.Dim_Date WHERE day_date >= @startdate AND day_date <= @enddate) rec
 LEFT OUTER JOIN #surveys_er
 ON rec.day_date = #surveys_er.RECDATE
 FULL OUTER JOIN (SELECT * FROM DS_HSDW_Prod.dbo.Dim_Date WHERE day_date >= @startdate AND day_date <= @enddate) dis -- Need to report by both the discharge date on the survey as well as the received date of the survey
 ON dis.day_date = #surveys_er.DISDATE
-LEFT OUTER JOIN DS_HSDW_App.Rptg.ED_Goals goals
+LEFT OUTER JOIN DS_HSDW_App.Rptg.ED_Goals_Test goals
 ON #surveys_er.REC_FY = goals.GOAL_FISCAL_YR AND #surveys_er.AGE_STATUS = goals.AGE_STATUS AND #surveys_er.Domain_Goals = goals.DOMAIN
 LEFT OUTER JOIN
 (
-	SELECT GOAL_FISCAL_YR, AGE_STATUS, GOAL, EPIC_DEPARTMENT_ID FROM DS_HSDW_App.Rptg.ED_Goals WHERE DOMAIN = 'Overall Mean'
+	SELECT GOAL_FISCAL_YR, AGE_STATUS, GOAL FROM DS_HSDW_App.Rptg.ED_Goals_Test WHERE DOMAIN = 'Overall Mean'
 ) goals_overall
 ON goals_overall.GOAL_FISCAL_YR = #surveys_er.REC_FY AND goals_overall.AGE_STATUS = #surveys_er.AGE_STATUS
 ORDER BY Event_Date, SURVEY_ID, sk_Dim_PG_Question
@@ -203,8 +203,7 @@ UNION ALL
 		,all_age.TOP_BOX
 		,all_age.VAL_COUNT
 		,all_age.AGE_STATUS
-	    ,goals.EPIC_DEPARTMENT_ID
-	    ,goals_overall.EPIC_DEPARTMENT_ID AS EPIC_DEPARTMENT_ID_OVERALL
+		,all_age.EPIC_DEPARTMENT_ID
 	FROM
 	(
 		SELECT
@@ -232,24 +231,40 @@ UNION ALL
 			,TOP_BOX
 			,VAL_COUNT
 			,CASE WHEN SURVEY_ID IS NULL THEN NULL ELSE 'All' END AS AGE_STATUS
+			,#surveys_er.EPIC_DEPARTMENT_ID
 		FROM (SELECT * FROM DS_HSDW_Prod.dbo.Dim_Date WHERE day_date >= @startdate AND day_date <= @enddate) rec
 		LEFT OUTER JOIN #surveys_er
 		ON rec.day_date = #surveys_er.RECDATE
 		FULL OUTER JOIN (SELECT * FROM DS_HSDW_Prod.dbo.Dim_Date WHERE day_date >= @startdate AND day_date <= @enddate) dis -- Need to report by both the discharge date on the survey as well as the received date of the survey
 		ON dis.day_date = #surveys_er.DISDATE
-		LEFT OUTER JOIN DS_HSDW_App.Rptg.ED_Goals goals
+		LEFT OUTER JOIN DS_HSDW_App.Rptg.ED_Goals_Test goals
 		ON #surveys_er.REC_FY = goals.GOAL_FISCAL_YR AND #surveys_er.AGE_STATUS = goals.AGE_STATUS AND #surveys_er.Domain_Goals = goals.DOMAIN
 	) all_age
-	LEFT OUTER JOIN DS_HSDW_App.Rptg.ED_Goals goals
+	LEFT OUTER JOIN DS_HSDW_App.Rptg.ED_Goals_Test goals
 	ON all_age.REC_FY = goals.GOAL_FISCAL_YR AND all_age.AGE_STATUS = goals.AGE_STATUS AND all_age.Domain_Goals = goals.DOMAIN
 	LEFT OUTER JOIN
-	DS_HSDW_App.Rptg.ED_Goals goals_overall
+	DS_HSDW_App.Rptg.ED_Goals_Test goals_overall
 	ON goals_overall.GOAL_FISCAL_YR = all_age.REC_FY AND goals_overall.AGE_STATUS = all_age.AGE_STATUS AND goals_overall.DOMAIN = 'Overall Mean' AND goals_overall.AGE_STATUS = 'All'
 )
 
+--SELECT DISTINCT
+--    Event_FY,
+--    UNIT,
+--    AGE_STATUS,
+--    DOMAIN,
+--    Domain_Goals,
+--    GOAL,
+--    GOAL_OVERALL
+--FROM #surveys_er3
+--WHERE DOMAIN IS NOT NULL
+--AND (GOAL IS NOT NULL OR GOAL_OVERALL IS NOT NULL)
+--ORDER BY Event_FY
+--       , UNIT
+--	   , AGE_STATUS
+--	   , Domain_Goals
+
 -------------------------------------------------------------------------------------------------------------------------------------
 -- RESULTS
-
 
  SELECT
     [Event_Type]
@@ -278,7 +293,6 @@ UNION ALL
    ,[VAL_COUNT]
    ,AGE_STATUS
    ,EPIC_DEPARTMENT_ID
-   ,EPIC_DEPARTMENT_ID_OVERALL
   INTO #ED
   FROM [#surveys_er3]
 ----------------------------------------------------------------------------------------------------------------------------
@@ -287,7 +301,8 @@ FROM #ED resp
 LEFT OUTER JOIN DS_HSDW_Prod.Rptg.vwRef_MDM_Location_Master_EpicSvc mdm
 ON mdm.epic_department_id = CAST(resp.EPIC_DEPARTMENT_ID AS NUMERIC(18,0))
 WHERE SURVEY_ID IS NOT NULL
-ORDER BY Event_FY, Event_Date, SURVEY_ID, AGE_STATUS, Domain_Goals, sk_Dim_PG_Question
+--ORDER BY Event_FY, Event_Date, SURVEY_ID, AGE_STATUS, Domain_Goals, sk_Dim_PG_Question
+ORDER BY resp.SURVEY_ID, Domain_Goals, sk_Dim_PG_Question, AGE_STATUS
 
 GO
 
